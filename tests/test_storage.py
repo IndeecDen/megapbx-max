@@ -69,6 +69,40 @@ def make_store(tmp_path: Path) -> SQLiteStore:
     return store
 
 
+def test_unknown_callback_requires_explicit_reconciliation(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    result = store.enqueue_job(event_key="max:callback:cb-unknown", kind="max_update", payload="{}")
+    job = store.claim_job()
+    assert job is not None
+    claim = store.claim_callback("cb-unknown", now=100)
+    assert claim.token is not None
+    store.mark_callback_external_unknown("cb-unknown", claim.token, now=101)
+    store.retry_job(job, delay_sec=0, error_code="CallbackOutcomeUnknown", max_attempts=1)
+    assert store.get_job_state(result.job_id) == "dead"
+    assert store.claim_callback("cb-unknown", now=1000).acquired is False
+
+    store.cleanup(max_age_sec=0, dedup_ttl_sec=0, callback_ttl_sec=0, now=1000)
+    assert store.get_job_state(result.job_id) == "dead"
+    store.retry_external_unknown_callback("cb-unknown")
+    assert store.get_job_state(result.job_id) == "pending"
+    assert store.list_external_unknown_callbacks() == []
+    assert store.claim_callback("cb-unknown").acquired is True
+    with pytest.raises(StorageError):
+        store.retry_external_unknown_callback("cb-unknown")
+
+
+def test_unknown_callback_resolution_does_not_close_notification(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    claim = store.claim_callback("cb-resolve")
+    assert claim.token is not None
+    store.mark_callback_external_unknown("cb-resolve", claim.token)
+    store.resolve_external_unknown_callback("cb-resolve")
+    assert store.list_external_unknown_callbacks() == []
+    assert store.claim_callback("cb-resolve").state == "committed"
+    with pytest.raises(StorageError):
+        store.resolve_external_unknown_callback("cb-resolve")
+
+
 def test_callid_delivery_claim_and_deduplication(tmp_path: Path) -> None:
     store = make_store(tmp_path)
 

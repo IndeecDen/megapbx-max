@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, model_validator
 
 
 class MaxModel(BaseModel):
@@ -10,18 +10,18 @@ class MaxModel(BaseModel):
 
 
 class User(MaxModel):
-    user_id: int
+    user_id: StrictInt
     first_name: str
     last_name: str | None = None
     username: str | None = None
-    is_bot: bool = False
-    last_activity_time: int | None = None
+    is_bot: StrictBool = False
+    last_activity_time: StrictInt | None = None
 
 
 class Recipient(MaxModel):
-    chat_id: int | None = None
+    chat_id: StrictInt | None = None
     chat_type: str
-    user_id: int | None = None
+    user_id: StrictInt | None = None
     post_id: str | None = None
 
 
@@ -36,7 +36,7 @@ class MessageBody(MaxModel):
 class Message(MaxModel):
     sender: User | None = None
     recipient: Recipient
-    timestamp: int
+    timestamp: StrictInt
     body: MessageBody | None = None
     link: dict[str, Any] | None = None
     stat: dict[str, Any] | None = None
@@ -48,7 +48,7 @@ class SendMessageResult(MaxModel):
 
 
 class Callback(MaxModel):
-    timestamp: int
+    timestamp: StrictInt
     callback_id: str = Field(min_length=1)
     payload: str | None = None
     user: User
@@ -56,8 +56,8 @@ class Callback(MaxModel):
 
 class Update(MaxModel):
     update_type: str
-    timestamp: int
-    chat_id: int | None = None
+    timestamp: StrictInt
+    chat_id: StrictInt | None = None
     user: User | None = None
     message: Message | None = None
     callback: Callback | None = None

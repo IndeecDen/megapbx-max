@@ -415,7 +415,7 @@ class MegapbxService:
 
     async def handle_callback(self, update: Update) -> None:
         callback = update.callback
-        if callback is None or callback.payload is None:
+        if callback is None or callback.payload is None or callback.user.is_bot:
             return
         payload = self._parse_callback_payload(callback.payload)
         if payload is None:

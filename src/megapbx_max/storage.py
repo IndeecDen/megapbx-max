@@ -820,6 +820,48 @@ class SQLiteStore:
             for row in rows
         ]
 
+    def resolve_external_unknown_callback(self, callback_id: str) -> None:
+        """Reconcile an ambiguous callback without replaying the MAX request."""
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                "UPDATE callback_events SET state = 'committed', claim_token = NULL, "
+                "lease_until = 0, updated_at = ? WHERE callback_id = ? AND state = 'external_unknown'",
+                (time.time(), callback_id),
+            )
+            if cursor.rowcount != 1:
+                raise StorageError("External-unknown callback was not found")
+
+    def retry_external_unknown_callback(self, callback_id: str) -> None:
+        """Atomically release an ambiguous answer and requeue its saved webhook."""
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT 1 FROM callback_events WHERE callback_id = ? AND state = 'external_unknown'",
+                (callback_id,),
+            ).fetchone()
+            if row is None:
+                raise StorageError("External-unknown callback was not found")
+            job = connection.execute(
+                "SELECT id, state FROM jobs WHERE event_key = ? AND kind = 'max_update'",
+                (f"max:callback:{callback_id}",),
+            ).fetchone()
+            if job is None or job["state"] not in {"dead", "pending", "completed"}:
+                raise StorageError("Callback job is missing or currently processing")
+            timestamp = time.time()
+            connection.execute(
+                "UPDATE jobs SET state = 'pending', attempts = 0, available_at = ?, "
+                "lease_until = NULL, claim_token = NULL, last_error_code = NULL, updated_at = ? "
+                "WHERE id = ?",
+                (timestamp, timestamp, job["id"]),
+            )
+            cursor = connection.execute(
+                "DELETE FROM callback_events WHERE callback_id = ? AND state = 'external_unknown'",
+                (callback_id,),
+            )
+            if cursor.rowcount != 1:
+                raise StorageError("External-unknown callback was not found")
+
     def complete_callback(
         self,
         callback_id: str,
@@ -1030,6 +1072,9 @@ class SQLiteStore:
             ).rowcount
             job_count = connection.execute(
                 "DELETE FROM jobs WHERE state IN ('completed', 'dead') AND updated_at < ? "
+                "AND NOT EXISTS (SELECT 1 FROM callback_events AS unknown_callback "
+                "WHERE unknown_callback.state = 'external_unknown' "
+                "AND jobs.event_key = 'max:callback:' || unknown_callback.callback_id) "
                 "AND NOT EXISTS ("
                 "SELECT 1 FROM delivery_claims AS unknown_claim "
                 "WHERE unknown_claim.state = 'unknown' AND ("

@@ -102,15 +102,13 @@ class MaxApiClient:
         if timeout_sec <= 0 or requests_per_second <= 0:
             raise ValueError("timeout and requests_per_second must be positive")
         self._owns_client = http_client is None
+        self._token = token
         self._client = http_client or httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
             headers={"Authorization": token, "Accept": "application/json"},
             timeout=timeout_sec,
             verify=verify,
         )
-        if http_client is not None:
-            # Mutating an injected client is intentional: every request must be authenticated.
-            http_client.headers["Authorization"] = token
         self._max_retries = max_retries
         self._retry_base_sec = retry_base_sec
         self._retry_max_sec = retry_max_sec
@@ -304,6 +302,7 @@ class MaxApiClient:
                     path,
                     params=params,
                     json=json_body,
+                    headers={"Authorization": self._token},
                     timeout=(
                         httpx.USE_CLIENT_DEFAULT
                         if timeout_sec is None

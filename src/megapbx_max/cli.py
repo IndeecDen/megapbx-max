@@ -50,6 +50,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("deliveries", help="list deliveries with an unknown external outcome")
     subparsers.add_parser("callback-unknown", help="list callbacks with an unknown external answer")
+    resolve_callback = subparsers.add_parser(
+        "resolve-callback-unknown", help="dismiss an unknown callback without retrying or closing the notification"
+    )
+    resolve_callback.add_argument("--callback-id", required=True)
+    retry_callback = subparsers.add_parser(
+        "retry-callback-unknown", help="explicitly retry an unknown callback"
+    )
+    retry_callback.add_argument("--callback-id", required=True)
     resolve = subparsers.add_parser("resolve-unknown", help="resolve an unknown delivery as sent")
     resolve.add_argument("--record-id", required=True)
     resolve.add_argument("--message-mid", required=True)
@@ -126,12 +134,21 @@ async def run_async(args: argparse.Namespace) -> int:
         async with _max_client_from_env() as client:
             return await _discover(client, timeout_sec=args.timeout)
 
-    if args.command in {"deliveries", "callback-unknown", "resolve-unknown", "retry-unknown"}:
+    if args.command in {
+        "deliveries", "callback-unknown", "resolve-callback-unknown", "retry-callback-unknown",
+        "resolve-unknown", "retry-unknown",
+    }:
         settings = Settings.from_env()
         storage = SQLiteStore(settings.state_db_path)
         storage.initialize()
         if args.command == "callback-unknown":
             print(json.dumps(storage.list_external_unknown_callbacks(), ensure_ascii=False, indent=2))
+        elif args.command == "resolve-callback-unknown":
+            storage.resolve_external_unknown_callback(args.callback_id)
+            print("Unknown callback dismissed; notification state was not changed")
+        elif args.command == "retry-callback-unknown":
+            storage.retry_external_unknown_callback(args.callback_id)
+            print("Unknown callback released for an explicit retry")
         elif args.command == "deliveries":
             values = [
                 {

@@ -4,6 +4,7 @@ from typing import Any
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from megapbx_max.max_api.client import MaxApiClient, MaxApiError, MaxOperationError
 from megapbx_max.max_api.models import CallbackPayload, Update
@@ -47,6 +48,36 @@ def test_callback_update_is_parsed() -> None:
     assert update.callback.callback_id == "keyboard-1"
     payload = CallbackPayload.model_validate_json(update.callback.payload)
     assert payload.record_id == "record-1"
+
+
+@pytest.mark.parametrize("field,value", [("user_id", "9"), ("is_bot", "false")])
+def test_callback_user_rejects_coerced_identity_fields(field: str, value: str) -> None:
+    with pytest.raises(ValidationError):
+        Update.model_validate({
+            "update_type": "message_callback", "timestamp": 1,
+            "callback": {
+                "timestamp": 1, "callback_id": "cb-1",
+                "user": {"user_id": 9, "first_name": "Agent", "is_bot": False, field: value},
+            },
+        })
+
+
+def test_injected_http_client_is_not_mutated() -> None:
+    import asyncio
+
+    async def exercise() -> None:
+        async with httpx.AsyncClient(
+            base_url="https://platform-api2.max.ru",
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"updates": []})),
+            headers={"X-Shared": "yes"},
+        ) as http_client:
+            client = MaxApiClient("max-secret", http_client=http_client)
+            assert "Authorization" not in http_client.headers
+            await client.get_updates(marker=None)
+            assert "Authorization" not in http_client.headers
+            assert http_client.headers["X-Shared"] == "yes"
+
+    asyncio.run(exercise())
 
 
 def test_callback_without_optional_payload_is_valid() -> None:
