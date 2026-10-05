@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*", "megapbx-max-v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m pip install -r requirements.lock
+      - run: pytest -q
+      - run: ruff check src tests
+      - run: mypy src
+      - run: pip-audit -r requirements.lock
+      - run: bash -n install.sh
+      - run: sha256sum -c SHA256SUMS
+      - run: python -m pip wheel . --no-deps --wheel-dir /tmp/megapbx-max-dist
+      - name: Smoke-test built wheel
+        run: |
+          python -m venv /tmp/megapbx-max-wheel
+          /tmp/megapbx-max-wheel/bin/python -m pip install --no-deps /tmp/megapbx-max-dist/*.whl
+          /tmp/megapbx-max-wheel/bin/python -c "import megapbx_max; print(megapbx_max.__version__)"
