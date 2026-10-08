@@ -15,7 +15,8 @@
 
 - храните `/etc/megapbx-max.env` в режиме `0600`;
 - используйте разные значения для `MAX_BOT_TOKEN`, `MAX_WEBHOOK_SECRET`, `MEGAPBX_CRM_TOKEN` и `MEGAPBX_API_TOKEN`;
-- передавайте токены только заголовками, не в URL и не application-лог;
+- передавайте токены заголовками; для MegaPBX допускается явно включённый
+  legacy query-token, при этом на всех reverse proxy исключите query string из логов;
 - используйте HTTPS с доверенным сертификатом на порту 443;
 - не отключайте проверку `X-CRM-Token` и `X-Max-Bot-Api-Secret`;
 - оставляйте query-token для MegaPBX выключенным, если CRM не требует legacy-режим;

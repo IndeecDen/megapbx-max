@@ -15,7 +15,7 @@ python -m pip wheel . --no-deps --wheel-dir dist
 
 ## Локальная проверка release
 
-Последний локальный прогон на Windows/Python 3.12: `104 passed`; также зелёные
+Последний локальный прогон на Windows/Python 3.12: `125 passed`; также зелёные
 `ruff`, `mypy`, `compileall`, `bash -n install.sh` и `sha256sum -c SHA256SUMS`.
 Собранный wheel установлен в чистое Python 3.11.16 environment, `pip check` не
 обнаружил конфликтов. Запуск настоящего uvicorn-процесса проверил `/readyz`,
@@ -23,8 +23,10 @@ durable enqueue и миграцию legacy SQLite schema.
 
 Единственное предупреждение тестового прогона — upstream `StarletteDeprecationWarning`
 в `fastapi.testclient` о переходе на `httpx2`; production-код и HTTP-клиент
-по-прежнему используют поддерживаемый `httpx`. Эти проверки не заменяют
-smoke-test на опубликованном MAX-боте и чистую Debian/Ubuntu VM.
+по-прежнему используют поддерживаемый `httpx`. На Debian отдельно проверены
+установка/обновление и реальные уведомления опубликованного MAX-бота:
+ручное закрытие, успешный перезвон и завершение очереди. Это не означает
+ручного воспроизведения всех отказных сценариев в production.
 
 Текущий набор покрывает:
 
@@ -51,6 +53,10 @@ smoke-test на опубликованном MAX-боте и чистую Debian
 - повторное открытие missed-job после dedup TTL;
 - неоднозначный malformed 2xx `/answers` и ручное восстановление claim без `callid`;
 - installer ShellCheck и проверка конфликта Nginx `server_name`.
+- Online Backup API SQLite с committed WAL и удалением неполной копии при ошибке;
+- исходящие `ACCEPTED`/`COMPLETED`, поздняя история направления и перезапуск;
+- отрицательные signed int64 ID чатов;
+- подавление стандартных HTTP-логов даже при CLI DEBUG.
 
 ## Локальный MegaPBX webhook
 
@@ -95,9 +101,10 @@ curl -i http://127.0.0.1:8000/megapbx/webhook \
 | `history/Missed` | одно уведомление с именем/номером и кнопкой |
 | тот же `callid` дважды | одно уведомление, webhook duplicate |
 | три звонка подряд | сообщения идут с лимитом не быстрее 2/с на чат |
-| `event/ACCEPTED` | уведомление меняет кнопку на «Перезвонил …» |
-| `event/COMPLETED` | то же |
+| `event/ACCEPTED` с ID уведомления | уведомление меняет кнопку на «Перезвонил …» |
+| `event/COMPLETED` с ID уведомления | то же |
 | `event/OUTGOING` | уведомление остаётся открытым |
+| `ACCEPTED`/`COMPLETED` известного исходящего звонка | задание завершается без редактирования |
 | `history/out/success/missedStatus=2` | авто-closing по телефону |
 | `history/out/Busy/missedStatus=2` | строка `↩️ …: ☎️ Занято` |
 | нажать «Я наберу» | `POST /answers`, запись закрыта один раз |

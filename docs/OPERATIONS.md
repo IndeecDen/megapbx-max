@@ -19,7 +19,7 @@ Authorization: <MAX_BOT_TOKEN>
 
 ## 2. Получение `MAX_CHAT_ID`
 
-Для отправки сообщения нужен положительный `int64` идентификатор чата.
+Для отправки сообщения нужен ненулевой знаковый `int64` идентификатор чата; у группового чата он может быть отрицательным.
 
 Основной способ:
 
@@ -34,10 +34,13 @@ Authorization: <MAX_BOT_TOKEN>
 До создания production-подписки запустите отдельный development-цикл и отправьте боту стартовое сообщение или добавьте его в чат:
 
 ```bash
-MAX_BOT_TOKEN=... megapbx-max discover-chat-id
+megapbx-max discover-chat-id
 ```
 
-Команда выводит только найденные `chat_id`. С июня 2026 года `GET /chats` больше не поддерживается, поэтому автоматически перечислить все доступные боту чаты нельзя.
+Предварительно задайте `MAX_BOT_TOKEN` в окружении; этой команде ещё не нужны
+ID чата и фильтры АТС. Команда выводит только найденные `chat_id`. С июня
+2026 года `GET /chats` больше не поддерживается, поэтому автоматически
+перечислить все доступные боту чаты нельзя.
 
 Для работы в группе назначьте бота администратором с правами чтения сообщений (`read_all_messages`) и изменения сообщений (`write`).
 
@@ -120,12 +123,47 @@ curl -fsSL https://raw.githubusercontent.com/IndeecDen/megapbx-max/main/install.
   -o /tmp/megapbx-max-install.sh
 less /tmp/megapbx-max-install.sh
 sudo bash /tmp/megapbx-max-install.sh \
-  --ref main --with-nginx \
+  --tag v0.1.0 --with-nginx \
   --domain bot.example.com --enable-tls \
   --tls-email admin@example.com
 ```
 
 Для private repository добавьте `--github-token-file /root/.megapbx-github-token`. В production используйте `--tag <release-tag>` или `--commit <sha>`, а не изменяемый `main`. Installer сохраняет `/var/lib/megapbx-max/state.sqlite3` при обновлении и rollback, приводит конфигурацию к `root:root` и `0600`, а перед стартом проверяет её тем же `Settings.from_env`, что и приложение.
+
+### Внешний HTTPS-прокси / Nginx Proxy Manager
+
+Если TLS завершается на другом хосте, установите локальный HTTP Nginx:
+
+```bash
+sudo bash /tmp/megapbx-max-install.sh \
+  --tag v0.1.0 --with-nginx --domain bot.example.com
+```
+
+В NPM создайте Proxy Host для `bot.example.com`, назначьте доверенный
+сертификат и задайте upstream `http://<внутренний-IP-VM>:80`. Локальный
+Nginx передаёт запросы приложению на `127.0.0.1:8000`. Доступ к порту 80 VM
+ограничьте хостом прокси. В конфигурации приложения остаётся публичный
+`MAX_WEBHOOK_URL=https://bot.example.com/max/webhook`.
+
+Если внешний HTTPS ещё не готов, при установке добавьте `--no-subscribe`,
+а после проверки маршрута выполните `subscribe` с production-окружением.
+При legacy query-токене отключите запись query string и на внешнем прокси.
+
+### Пути и unattended-установка
+
+| Путь | Содержимое |
+|---|---|
+| `/etc/megapbx-max.env` | Защищённая конфигурация, `0600` |
+| `/opt/megapbx-max/releases/` | Установленные выпуски с virtualenv |
+| `/opt/megapbx-max/current` | Ссылка на активный выпуск |
+| `/var/lib/megapbx-max/state.sqlite3` | SQLite состояния, счётчиков и очереди |
+| `/var/backups/megapbx-max/transaction.*/` | Резервные копии перед обновлением |
+| `megapbx-max.service` | systemd-сервис |
+
+Для автоматизированной установки подготовьте защищённый env-файл и используйте
+`--non-interactive --env-file /root/megapbx-max.env --yes` вместе с выбранными
+параметрами reverse proxy. Перед применением можно добавить `--dry-run`.
+Полный список флагов: `bash install.sh --help`.
 
 ## 6. Переменные окружения
 
@@ -136,25 +174,47 @@ sudo bash /tmp/megapbx-max-install.sh \
 - `MEGAPBX_CRM_TOKEN` — общий секрет webhook MegaPBX;
 - хотя бы один фильтр направления либо явный `MEGAPBX_ALLOW_ALL=1`.
 
-Webhook MAX включается через `MAX_WEBHOOK_SECRET`. Полный шаблон находится в `.env.example`.
+Webhook MAX включается через `MAX_WEBHOOK_SECRET`. Полный шаблон находится
+в [`.env.example`](../.env.example), описание всех параметров — в
+[CONFIGURATION.md](CONFIGURATION.md). Там же приведён запуск CLI с
+production environment file: обычная SSH-сессия не наследует окружение сервиса.
 
 ## 7. Обновление и rollback
 
 Installer перед изменением release/systemd/Nginx создаёт transaction в
-`/var/backups/megapbx-max` и сохраняет state DB. Для production-обновления
-используйте `--tag` или `--commit`, сохраните копию `state.sqlite3` средствами
-SQLite backup и не удаляйте transaction-каталоги до успешного smoke-test. При
+`/var/backups/megapbx-max` и сохраняет существующую БД в `transaction.*/state.sqlite3`
+через SQLite Online Backup API (включая данные WAL), затем выполняет `quick_check`.
+Копия имеет права `0600`; при ошибке резервного копирования обновление прерывается.
+Путь к БД берётся из прежней конфигурации. При первой установке копии БД ещё нет.
+Для production-обновления используйте `--tag` или `--commit` и не удаляйте
+transaction-каталоги до успешной проверки. При
 ошибке installer автоматически возвращает предыдущий symlink `current`, unit и
 конфигурацию; SQLite state не откатывается. Ручной rollback выпуска выполняется
 снова через installer с предыдущим immutable ref после проверки совместимости
 schema.
 
+Автоматический rollback не восстанавливает БД из копии, чтобы не потерять события,
+принятые после создания снимка. Восстановление БД — отдельная ручная операция
+при остановленном сервисе. Для локальных установок храните актуальный `install.sh`
+вместе с проверенным исходным release; не используйте старые отладочные копии.
+
 ## 8. Диагностика
+
+Пошаговый разбор HTTP, DNS, TLS и фильтров: [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+
+События `ACCEPTED`/`COMPLETED` могут относиться к исходящему перезвону с отдельным
+`callid`. Если в durable inbox уже есть `OUTGOING` или `history/type=out` этого
+звонка, промежуточное событие завершается без изменения сообщения. Успешный
+перезвон закрывает уведомление по `history/Success/out/missedStatus=2`.
+Если направление ещё неизвестно, событие ожидает повторной обработки; соответствие
+другому звонку только по номеру для таких промежуточных событий не используется.
 
 - `/healthz` — процесс работает;
 - `/readyz` — конфигурация загружена и SQLite доступна;
 - `megapbx-max deliveries` — записи с неоднозначным результатом `POST /messages`;
 - `megapbx-max callback-unknown` — callback'ы с неоднозначным ответом `/answers`;
+- `megapbx-max resolve-callback-unknown --callback-id ...` — после ручной сверки пометить неопределённый callback завершённым **без** повторного `/answers` и **без** закрытия уведомления в SQLite. Если MAX уже изменил сообщение, отдельно сверьте и устраните расхождение состояния;
+- `megapbx-max retry-callback-unknown --callback-id ...` — только после проверки, что MAX **не** применил ответ: вернуть сохранённый webhook в очередь для повторного `/answers`. При неизвестном результате не применяйте эту команду вслепую: возможно повторное действие или отказ MAX;
 - `megapbx-max resolve-unknown --record-id ... --message-mid ...` — подтвердить, что сообщение существует;
 - `megapbx-max retry-unknown --record-id ...` — только осознанно разрешить повторную отправку; команда освобождает claim, возвращает связанный job в очередь и закрывает pending-счётчик. Для claim без `callid` связь также хранится в SQLite; если job уже удалён cleanup, команда возвращает ошибку и сохраняет claim для ручной сверки;
 - `megapbx-max check` — отдельная проверка актуальности MAX-токена;
@@ -163,3 +223,6 @@ schema.
 - `GET /subscriptions` — проверка production-подписки.
 
 Ошибки `401` обычно означают неверный токен, `403` — недостаток прав, `405` — конфликт Webhook/Long Polling, `429` — превышение лимита, `503` — недоступность MAX.
+
+CLI ограничивает журналы `httpx`/`httpcore` уровнем WARNING даже при `--log-level DEBUG`,
+чтобы стандартные HTTP-логи не раскрывали query-параметры, включая `callback_id`.

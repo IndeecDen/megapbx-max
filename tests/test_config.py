@@ -25,6 +25,21 @@ def test_settings_from_env() -> None:
     assert settings.max_api_base == "https://platform-api2.max.ru"
 
 
+@pytest.mark.parametrize("chat_id", ["-12345678901234", "-9223372036854775808", "9223372036854775807"])
+def test_signed_chat_ids_are_accepted(chat_id: str) -> None:
+    env = valid_env()
+    env["MAX_CHAT_ID"] = chat_id
+    assert Settings.from_env(env).max_chat_id == int(chat_id)
+
+
+@pytest.mark.parametrize("chat_id", ["0", "-0", "9223372036854775808", "-9223372036854775809"])
+def test_zero_and_out_of_range_chat_ids_are_rejected(chat_id: str) -> None:
+    env = valid_env()
+    env["MAX_CHAT_ID"] = chat_id
+    with pytest.raises(ConfigurationError, match="MAX_CHAT_ID"):
+        Settings.from_env(env)
+
+
 @pytest.mark.parametrize("variable", ["MAX_BOT_TOKEN", "MAX_CHAT_ID", "MEGAPBX_CRM_TOKEN"])
 def test_required_values_are_rejected_when_missing(variable: str) -> None:
     env = valid_env()

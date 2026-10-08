@@ -192,9 +192,9 @@ class Settings:
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
         values = os.environ if env is None else env
-        max_chat_id = _parse_int(values, "MAX_CHAT_ID", 0, minimum=1)
-        if max_chat_id > MAX_INT64:
-            raise ConfigurationError("MAX_CHAT_ID must fit into a signed 64-bit integer")
+        max_chat_id = _parse_int(values, "MAX_CHAT_ID", 0)
+        if max_chat_id == 0 or not -2**63 <= max_chat_id <= MAX_INT64:
+            raise ConfigurationError("MAX_CHAT_ID must be a nonzero signed 64-bit integer")
 
         max_webhook_secret = _get(values, "MAX_WEBHOOK_SECRET")
         if max_webhook_secret is not None and not 5 <= len(max_webhook_secret) <= 256:

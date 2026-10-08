@@ -337,6 +337,11 @@ class MegapbxService:
             return True
         call_id = as_text(payload.get("callid"))
         if call_id:
+            # ACCEPTED/COMPLETED also belong to outgoing calls, whose callid
+            # differs from the missed call. Wait for history to determine the
+            # callback outcome; never close a notification on these events.
+            if self.storage.is_outgoing_call(call_id):
+                return True
             record = self.storage.get_latest_by_call_id(call_id)
         else:
             record = self._recent_record(payload.get("phone"))

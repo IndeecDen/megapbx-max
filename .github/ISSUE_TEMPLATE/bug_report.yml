@@ -1,0 +1,42 @@
+name: Ошибка
+description: Сообщить о воспроизводимой ошибке
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Используйте синтетические данные. Не прикладывайте токены, `.env`, SQLite,
+        реальные телефоны, ID чатов и адреса серверов.
+        Об уязвимостях сообщайте по инструкции SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: Версия / commit
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Окружение
+      description: ОС, Python, способ установки, тип reverse proxy
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Шаги воспроизведения
+      description: Минимальный пример без реальных данных
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Ожидаемый и фактический результат
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Обезличенная диагностика
+      description: HTTP-статусы и коды ошибок; проверьте текст перед отправкой
+      render: text

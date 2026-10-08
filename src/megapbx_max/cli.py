@@ -392,6 +392,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         level=getattr(logging, args.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+    # HTTP debug/info logs include query strings (notably MAX callback IDs).
+    # Application logs already report operation results without these values.
+    for name in ("httpx", "httpcore"):
+        logging.getLogger(name).setLevel(logging.WARNING)
     try:
         return asyncio.run(run_async(args))
     except KeyboardInterrupt:

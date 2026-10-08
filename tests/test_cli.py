@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import pytest
@@ -7,6 +8,26 @@ import pytest
 from megapbx_max.cli import build_parser, run_async
 from megapbx_max.config import ConfigurationError
 from megapbx_max.max_api.models import BotInfo
+
+
+def test_cli_suppresses_http_urls_even_at_debug(monkeypatch, caplog) -> None:
+    from megapbx_max.cli import main
+
+    async def fake_run(_args):
+        logging.getLogger("httpx").info("HTTP Request callback_id=sensitive-callback")
+        logging.getLogger("httpcore.http11").debug("request headers Authorization=sensitive-token")
+        logging.getLogger("megapbx_max.service").info("Callback completed")
+        return 0
+
+    monkeypatch.setattr("megapbx_max.cli.run_async", fake_run)
+    # Restore logger levels after the CLI's process-wide configuration.
+    for name in ("httpx", "httpcore"):
+        monkeypatch.setattr(logging.getLogger(name), "level", logging.NOTSET)
+    with caplog.at_level(logging.DEBUG):
+        assert main(["--log-level", "DEBUG", "check"]) == 0
+    assert "sensitive-callback" not in caplog.text
+    assert "sensitive-token" not in caplog.text
+    assert "Callback completed" in caplog.text
 
 
 class FakeMaxClient:

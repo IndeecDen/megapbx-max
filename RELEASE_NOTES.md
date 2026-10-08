@@ -1,8 +1,10 @@
-# Release notes — megapbx-max-v0.1.0 (draft)
+# Release notes — v0.1.0
 
-**Дата:** ещё не назначена
+**Дата:** 8 октября 2026
 
-**Статус:** draft; локальные проверки завершены, требуется production smoke-test MAX.
+Первый выпуск интеграции MegaPBX → MAX. На Debian проверены установка,
+обновление, реальные уведомления, ручное закрытие кнопкой и автоматическое
+закрытие после успешного перезвона.
 
 ## Что входит
 
@@ -14,18 +16,31 @@
 - production MAX Webhook и development Long Polling;
 - health checks, CLI и тесты.
 
-## До выпуска
+### Исправления после развёртывания
 
-- создать и опубликовать бота MAX;
-- получить `MAX_CHAT_ID`;
-- проверить права администратора в рабочем чате;
-- развернуть HTTPS на 443 с доверенным сертификатом;
-- выполнить `megapbx-max check` и `megapbx-max subscribe`;
-- прогнать sanitized и реальный MegaPBX webhook;
-- проверить серию из трёх звонков, callback, duplicate delivery и `429/500/503`;
-- подготовить installer и release tag.
+- промежуточные `ACCEPTED`/`COMPLETED` исходящего звонка распознаются по сохранённым
+  `OUTGOING` или `history/type=out` с тем же `callid` и не повторяются в ожидании
+  несуществующего уведомления; закрытие по итоговой истории перезвона сохранено;
+- скрыты стандартные INFO/DEBUG HTTP-логи с полным `callback_id`;
+- installer создаёт проверенную SQLite-копию через Online Backup API до обновления;
+- исправлены атомарная запись `.env`, экспорт конфигурации и порядок проверки systemd unit;
+- поддерживаются отрицательные ID групповых чатов MAX.
 
-Локально уже проверены: `104 passed`, Ruff, mypy, `compileall`, shell syntax,
-`sha256sum -c SHA256SUMS`, wheel build/install на Python 3.11 и uvicorn smoke
-с legacy SQLite schema. Остаются только production/VM checks, commit и push
-после согласования.
+## Установка
+
+См. [README](README.md#быстрый-старт), [справочник настроек](docs/CONFIGURATION.md)
+и [эксплуатацию](docs/OPERATIONS.md). Для installer используйте `--tag v0.1.0`.
+Поддерживается внешний HTTPS reverse proxy, в том числе Nginx Proxy Manager.
+Для legacy CRM с ключом в URL явно включите `MEGAPBX_ALLOW_QUERY_TOKEN=1`.
+
+## Проверки и ограничения
+
+Регрессионные тесты покрывают очередь, события вне порядка, неизвестные
+внешние результаты, auth, миграции и SQLite backup с WAL. Ошибки API
+проверяются на тестовых клиентах; отказные сценарии не воспроизводятся
+искусственно в рабочем чате.
+
+Один экземпляр сервиса обслуживает одну SQLite-базу. Для MAX Webhook нужен
+публичный HTTPS:443. `POST /messages` не поддерживает idempotency key;
+неоднозначная отправка требует ручной сверки через CLI. Кнопка «Я наберу»
+не инициирует звонок. Реальные данные развёртывания не входят в выпуск.

@@ -66,7 +66,7 @@ SQLite может содержать:
 
 ## MAX и MegaPBX
 
-Платформенные правитные документы:
+Документы платформы:
 
 - [Правила размещения чат-ботов MAX](https://dev.max.ru/docs/legal/rules);
 - [Требования к приложениям MAX](https://dev.max.ru/docs/legal/requirements);

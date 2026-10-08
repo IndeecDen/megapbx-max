@@ -10,12 +10,19 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
 authors = [{ name = "IndeecDen" }]
+keywords = ["megapbx", "max", "chatbot", "telephony", "webhook", "missed-calls"]
 dependencies = [
   "fastapi>=0.135,<1.0",
   "httpx>=0.28,<1.0",
   "pydantic>=2.10,<3.0",
   "uvicorn[standard]>=0.41,<1.0",
 ]
+
+[project.urls]
+Repository = "https://github.com/IndeecDen/megapbx-max"
+Documentation = "https://github.com/IndeecDen/megapbx-max#readme"
+Issues = "https://github.com/IndeecDen/megapbx-max/issues"
+Changelog = "https://github.com/IndeecDen/megapbx-max/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [

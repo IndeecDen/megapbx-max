@@ -122,6 +122,9 @@ CREATE INDEX IF NOT EXISTS idx_delivery_claims_state
     ON delivery_claims(state, updated_at);
 CREATE INDEX IF NOT EXISTS idx_jobs_due
     ON jobs(state, available_at, id);
+CREATE INDEX IF NOT EXISTS idx_jobs_pbx_call
+    ON jobs(trim(CAST(json_extract(payload, '$.callid') AS TEXT)))
+    WHERE kind = 'megapbx_event' AND json_valid(payload);
 """
 
 
@@ -945,6 +948,22 @@ class SQLiteStore:
             inserted=cursor.rowcount == 1,
             reopened=reopened,
         )
+
+    def is_outgoing_call(self, call_id: str) -> bool:
+        """Use durable PBX evidence, including events not yet processed by the worker."""
+        if not call_id:
+            return False
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM jobs WHERE kind = 'megapbx_event' AND json_valid(payload) "
+                "AND trim(CAST(json_extract(payload, '$.callid') AS TEXT)) = ? "
+                "AND ((lower(trim(json_extract(payload, '$.cmd'))) = 'event' "
+                "AND lower(trim(json_extract(payload, '$.type'))) = 'outgoing') "
+                "OR (lower(trim(json_extract(payload, '$.cmd'))) = 'history' "
+                "AND lower(trim(json_extract(payload, '$.type'))) = 'out')) LIMIT 1",
+                (call_id.strip(),),
+            ).fetchone()
+        return row is not None
 
     def claim_job(
         self,

@@ -1,0 +1,22 @@
+name: Предложение
+description: Предложить улучшение интеграции
+title: "[Feature]: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Какую задачу нужно решить?
+      description: Опишите сценарий без персональных данных и секретов
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Предлагаемое поведение
+    validations:
+      required: true
+  - type: textarea
+    id: references
+    attributes:
+      label: Дополнительная информация
+      description: Например, ссылки на публичную документацию MAX или MegaPBX

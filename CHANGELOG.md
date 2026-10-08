@@ -4,9 +4,11 @@
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-08
+
 ### Добавлено
 
-- перенос MegaPBX → Telegram на MAX Bot API с сохранением webhook-контракта;
+- перенос интеграции MegaPBX → Telegram на MAX Bot API;
 - типизированный Python-клиент MAX без `Bearer` и без неофициального SDK;
 - MAX Webhook `/max/webhook` с проверкой `X-Max-Bot-Api-Secret`;
 - команды `check`, `subscribe`, `subscriptions`, `unsubscribe`, `poll` и `discover-chat-id`;
@@ -20,9 +22,15 @@
 - миграция промежуточной SQLite schema и durable worker;
 - `SHA256SUMS` для проверяемого release manifest;
 - повторное открытие завершённого missed-job после истечения dedup TTL.
+- подробный справочник конфигурации, диагностика и шаблоны issues/PR;
+- SQLite Online Backup API перед обновлением с проверкой целостности.
 
 ### Исправлено
 
+- лишние повторы `ACCEPTED`/`COMPLETED` исходящего звонка при отдельном `callid`;
+- валидация отрицательных ID групповых чатов MAX;
+- экспорт переменных installer, атомарная запись конфигурации и порядок проверки systemd unit;
+- стандартные INFO/DEBUG HTTP-логи, раскрывавшие `callback_id`;
 - неоднозначный HTTP 408 outcome нового сообщения теперь не считается гарантированно неотправленным;
 - API URL с query/fragment/credentials отклоняются до запуска клиента;
 - installer восстанавливает удалённый config при rollback и проверяет все записи checksum;
@@ -51,7 +59,5 @@
 
 ### Ограничения
 
-- production-интеграция с опубликованным ботом MAX ещё не выполнена;
-- installer, systemd/Nginx и manifest проверены локально, но ещё не установлены на чистой Debian/Ubuntu VM;
-- release tag и push в GitHub не созданы;
+- один экземпляр приложения на SQLite-базу;
 - внешний вызов `POST /messages` не имеет idempotency key.

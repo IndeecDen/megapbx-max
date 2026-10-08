@@ -1,56 +1,115 @@
 # MegaPBX → MAX
 
-Бот уведомляет рабочий чат **MAX** о пропущенных входящих звонках MegaPBX. Оператор может нажать **«Я наберу»**, после чего исходное уведомление помечается как закрытое.
+Самостоятельно развёртываемый сервис, который принимает события виртуальной АТС MegaPBX и
+отправляет уведомления о пропущенных входящих звонках в рабочий чат MAX.
+Оператор может нажать **«Я наберу»** — сообщение изменится на
+**«Перезвонил …»**. Если MegaPBX сообщает об успешном исходящем перезвоне,
+сервис закрывает исходное уведомление автоматически.
 
-Проект переносит функциональность [`megapbx-tg`](https://github.com/IndeecDen/megapbx-tg) на официальный [MAX Bot API](https://dev.max.ru/docs/chatbots/bots-coding/prepare), не меняя контракт webhook MegaPBX.
+Проект переносит интеграцию [`megapbx-tg`](https://github.com/IndeecDen/megapbx-tg)
+на официальный [MAX Bot API](https://dev.max.ru/docs/chatbots/bots-coding/prepare),
+с поддержкой JSON и form webhook MegaPBX.
+
+[![CI](https://github.com/IndeecDen/megapbx-max/actions/workflows/ci.yml/badge.svg)](https://github.com/IndeecDen/megapbx-max/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue)](pyproject.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
+**Навигация:** [возможности](#возможности) · [установка](#быстрый-старт) ·
+[MegaPBX](#настройка-megapbx) · [MAX](#настройка-max) ·
+[параметры](docs/CONFIGURATION.md) · [диагностика](docs/TROUBLESHOOTING.md)
+
+Кнопка **«Я наберу»** — ручная отметка: она закрывает уведомление, но **не
+инициирует телефонный звонок** и не проверяет, состоялся ли разговор.
+
+> Документация и примеры не содержат production-адресов, идентификаторов чатов,
+> телефонов, персональных данных или секретов. Все значения в командах ниже —
+> placeholders.
 
 ## Возможности
 
-- принимает JSON, URL-encoded form и form с вложенным JSON в `POST /megapbx/webhook`;
-- проверяет `X-CRM-Token` и поддерживает Bearer/Basic-аутентификацию MegaPBX;
-- фильтрует направления по группе и DID;
-- показывает имя/номер клиента, группу, время ожидания и длительность;
-- ведёт постоянные счётчики пропущенных звонков по номеру;
-- дедуплицирует MegaPBX webhook по `callid`;
-- хранит состояние уведомлений и callback idempotency в SQLite;
-- отправляет сообщения и inline-кнопки через `POST /messages`;
-- редактирует сообщения через `PUT /messages` и `POST /answers`;
-- автоматически закрывает уведомление по событиям `ACCEPTED`/`COMPLETED` и успешному перезвону;
-- показывает статусы `Busy`, `Missed`, `NotAvailable`, `NotAllowed`, `NotFound` и `Cancel`;
-- принимает callback через production Webhook `POST /max/webhook`; durable SQLite inbox отвечает быстро, worker обрабатывает событие с retry;
-- проверяет `X-Max-Bot-Api-Secret` постоянным сравнением;
-- ограничивает MAX API глобально 30 RPS и 2 операциями/с на чат;
-- повторяет временные ошибки с backoff/jitter и не повторяет неоднозначный read timeout отправки;
-- не записывает в application-лог raw payload, токены, телефоны или имена клиентов;
-- обогащает имена сотрудников и групп через MegaPBX REST API.
+### MegaPBX
+
+- `POST /megapbx/webhook` принимает JSON, URL-encoded form и form с вложенным
+  JSON в поле `payload`;
+- аутентификация через `X-CRM-Token`, Bearer или Basic;
+- совместимость с legacy MegaPBX, который передаёт CRM-ключ в
+  `?token=...` — включается явно через `MEGAPBX_ALLOW_QUERY_TOKEN=1`;
+- фильтрация по имени группы, DID или явное разрешение всех направлений;
+- обработка `history/Missed` для входящих звонков;
+- имя/номер клиента, группа, ожидание и длительность в уведомлении;
+- постоянные счётчики пропущенных звонков по номеру за день и за всё время;
+- обработка событий `event` и итогов исходящего перезвона; `contact` принимается
+  в очередь без отправки уведомления и без CRM-обогащения ответа;
+- автоматическое закрытие по `history/Success/out/missedStatus=2`;
+- обновление текста при неудачном перезвоне (`Busy`, `Missed`, `Cancel`,
+  `NotAvailable`, `NotAllowed`, `NotFound`);
+- обогащение имён сотрудников и групп через MegaPBX REST API.
+
+### MAX
+
+- отправка HTML-сообщений с inline-кнопкой;
+- callback-кнопка «Я наберу» с идемпотентной обработкой;
+- callback Webhook `POST /max/webhook` с проверкой
+  `X-Max-Bot-Api-Secret`;
+- production Webhook и development Long Polling;
+- команды CLI: `check`, `subscribe`, `subscriptions`, `unsubscribe`,
+  `discover-chat-id`, `poll`, `deliveries`, `callback-unknown` и операции
+  восстановления неоднозначных результатов.
+
+### Надёжность и безопасность
+
+- durable SQLite inbox и worker с повторной обработкой;
+- дедупликация входящих событий по `callid` и MAX callbacks по `callback_id`;
+- безопасная модель неоднозначного результата `POST /messages`: сервис не
+  отправляет сообщение повторно вслепую;
+- retry с backoff/jitter для временных ошибок;
+- ограничение MAX API: глобально 30 RPS и 2 message-операции в секунду на чат;
+- ограничение размера webhook body;
+- HTML-экранирование пользовательских данных;
+- application-логи без raw payload, токенов, телефонов и имён клиентов;
+- Online Backup API SQLite перед обновлением, проверка `quick_check` и права
+  `0600` для production-конфигурации и backup-файлов;
+- systemd hardening, отдельный системный пользователь и HTTPS reverse proxy.
 
 ## Архитектура
 
 ```text
-MegaPBX ──POST /megapbx/webhook──▶ FastAPI
-                                      │
-                                      ├─ MegaPBX parser/auth/filters
-                                      ├─ SQLite state + deduplication
-                                      └─ MAX HTTP client ──▶ chat_id в MAX
+MegaPBX ──POST /megapbx/webhook──▶ HTTPS reverse proxy ──▶ FastAPI
+                                                               │
+                                             auth / parser / filter
+                                                               │
+                                                        SQLite inbox
+                                                               │
+                                                        durable worker
+                                                               │
+                                                               ▼
+                                                        MAX Bot API
 
-MAX ──POST /max/webhook──────────▶ FastAPI
-                                      └─ message_callback ──▶ POST /answers
+MAX ──POST /max/webhook──────────▶ HTTPS reverse proxy ──▶ FastAPI
+                                                               │
+                                                        callback worker
+                                                               │
+                                                               ▼
+                                                        POST /answers
 ```
 
-MAX не публикует список чатов бота после июня 2026 года, поэтому `MAX_CHAT_ID` получают из `bot_added`/`bot_started` и фиксируют в конфигурации. См. [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
+Один экземпляр приложения должен обслуживать одну SQLite-базу. В production
+рекомендуется завершать TLS во внешнем Nginx Proxy Manager, Nginx или другом
+reverse proxy, а приложение оставлять доступным только на loopback.
 
-## Требования
+## Быстрый старт
 
-- Python 3.11+;
-- верифицированный профиль MAX для партнёров и опубликованный бот;
-- HTTPS Webhook на публичном порту 443 с доверенным сертификатом;
-- для группового чата — бот-администратор с правами `read_all_messages` и `write`.
+### Требования
 
-Официального Python SDK у MAX нет. Клиент написан на `httpx` и Pydantic по официальной OpenAPI-схеме `0.0.33` от 18.09.2026.
+- Debian/Ubuntu с systemd для production;
+- Python 3.11+ для локального запуска;
+- опубликованный и верифицированный MAX-бот;
+- публичный HTTPS на порту 443 с доверенным сертификатом;
+- администраторские права MAX-бота в рабочем чате с `read_all_messages` и
+  `write`;
+- доступ MegaPBX к публичному адресу CRM Webhook.
 
-## Локальный запуск
-
-### PowerShell
+### Локальный запуск
 
 ```powershell
 python -m venv .venv
@@ -59,122 +118,201 @@ python -m pip install -e ".[dev]"
 Copy-Item .env.example .env
 ```
 
-Установите как минимум:
+Заполните `.env` только локально. Файл `.env` не читается автоматически
+приложением, поэтому передайте его явно:
 
 ```powershell
-$env:MAX_BOT_TOKEN="..."
-$env:MAX_CHAT_ID="..."
-$env:MAX_WEBHOOK_SECRET="..."
-$env:MEGAPBX_CRM_TOKEN="..."
-$env:MEGAPBX_ALLOWED_DID="..."
+uvicorn --env-file .env megapbx_max.main:create_app --factory `
+  --host 127.0.0.1 --port 8000 --no-access-log
 ```
 
-Приложение не читает `.env` автоматически. Передавайте переменные через окружение, `--env-file`, systemd или контейнер. После заполнения `.env` его можно запустить так:
+Или задайте переменные окружения и используйте CLI:
 
 ```powershell
-uvicorn --env-file .env megapbx_max.main:create_app --factory --host 127.0.0.1 --port 8000
-```
+$env:MAX_BOT_TOKEN = "<max-bot-token>"
+$env:MAX_CHAT_ID = "<signed-int64-chat-id>"
+$env:MAX_WEBHOOK_SECRET = "<random-max-webhook-secret>"
+$env:MEGAPBX_CRM_TOKEN = "<crm-webhook-secret>"
+$env:MEGAPBX_ALLOWED_DID = "<allowed-did>"
 
-Либо штатной командой:
-
-```powershell
-$env:MAX_BOT_TOKEN="..."
 megapbx-max check
 megapbx-max serve
 ```
 
-## Проверка MAX API и Webhook
+### Production installer
 
-Для API-команд достаточно `MAX_BOT_TOKEN`:
-
-```powershell
-megapbx-max check
-megapbx-max subscriptions
-$env:MAX_WEBHOOK_SECRET="webhook_secret-1"
-megapbx-max subscribe --url https://bot.example.com/max/webhook
-```
-
-Для `subscribe` можно использовать `MAX_WEBHOOK_URL` и `MAX_WEBHOOK_SECRET`. Production использует только Webhook; Long Polling:
-
-```powershell
-megapbx-max poll
-```
-
-предназначен исключительно для разработки. Получить `chat_id` из событий запуска до production-подписки:
-
-```powershell
-megapbx-max discover-chat-id
-```
-
-## Health checks
-
-```text
-GET /healthz   — процесс работает
-GET /readyz    — состояние и SQLite готовы
-GET /          — краткий health response
-```
-
-## Установка на Debian/Ubuntu
-
-Installer разворачивает отдельного системного пользователя, release-каталоги, SQLite state, systemd unit и опционально Nginx/Let's Encrypt. Installer всегда требует `MAX_WEBHOOK_SECRET`, даже если TLS и Nginx обслуживаются внешним load balancer: секрет нужен для подписки MAX. На чистой Debian/Ubuntu VM должны быть доступны `bash`, `apt-get` и systemd; installer сам устанавливает `curl`, `tar`, `flock` и Python-пакеты (curl также нужен для приведённой команды загрузки):
+Сначала скачайте installer, просмотрите его и используйте immutable release
+(`--tag` или `--commit`) вместо изменяемой ветки:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/IndeecDen/megapbx-max/main/install.sh -o /tmp/megapbx-max-install.sh
+curl -fsSL https://raw.githubusercontent.com/IndeecDen/megapbx-max/main/install.sh \
+  -o /tmp/megapbx-max-install.sh
 less /tmp/megapbx-max-install.sh
+
 sudo bash /tmp/megapbx-max-install.sh \
-  --ref main \
+  --tag v0.1.0 \
   --with-nginx \
   --domain bot.example.com \
   --enable-tls \
   --tls-email admin@example.com
 ```
 
-Для private repository используйте PAT-файл с правами `0600`:
+Installer:
 
-```bash
-sudo bash /tmp/megapbx-max-install.sh \
-  --ref main \
-  --github-token-file /root/.megapbx-github-token \
-  --with-nginx --domain bot.example.com \
-  --enable-tls --tls-email admin@example.com
+1. проверяет ОС, Python и аргументы;
+2. загружает только release-файлы из manifest;
+3. проверяет `SHA256SUMS`;
+4. создаёт отдельного пользователя, virtualenv и systemd unit;
+5. сохраняет существующую SQLite через SQLite Online Backup API перед заменой;
+6. переключает `current` symlink на новый release;
+7. проверяет конфигурацию тем же валидатором, что использует приложение;
+8. запускает health check и проверяет Nginx;
+9. при необходимости регистрирует MAX Webhook.
+
+Подробнее: [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
+
+При внешнем Nginx Proxy Manager используйте `--with-nginx` без
+`--enable-tls`: внешний прокси завершает HTTPS и передаёт запросы по HTTP
+на порт 80 VM. Пошаговая схема есть в разделе
+[внешнего HTTPS-прокси](docs/OPERATIONS.md#внешний-https-прокси--nginx-proxy-manager).
+
+## Настройка MegaPBX
+
+В настройках CRM MegaPBX укажите:
+
+```text
+Адрес CRM: https://bot.example.com/megapbx/webhook
 ```
 
-В production передавайте зафиксированный release tag через `--tag <tag>` (или `--commit <sha>`) вместо `--ref main`. Установщик не копирует `.env`, `.venv`, SQLite и backup-файлы, проверяет `SHA256SUMS` release manifest, создаёт `/etc/megapbx-max.env` с правами `0600` и сохраняет state DB при rollback. Shell syntax проверяется CI (`bash -n`); Python 3.11+ должен быть доступен системе, для нестандартной версии используйте `MEGAPBX_MAX_PYTHON=/path/to/python3.11`.
+CRM-ключ должен совпадать с `MEGAPBX_CRM_TOKEN`. Сначала предпочтителен
+заголовок `X-CRM-Token`. Некоторые legacy-конфигурации MegaPBX добавляют ключ
+в URL как `?token=...`; для такого режима задайте:
 
-## Восстановление неоднозначной отправки
-
-Если MAX принял запрос, но ответ потерялся, запись не повторяется автоматически:
-
-```bash
-megapbx-max deliveries
-megapbx-max resolve-unknown --record-id <record> --message-mid <mid>
+```dotenv
+MEGAPBX_ALLOW_QUERY_TOKEN=1
 ```
 
-Команда `retry-unknown` используется только после ручной проверки, что сообщение не было создано; она освобождает claim и сразу возвращает связанный durable job в очередь. Связь хранится и для webhook без `callid`; если job уже удалён cleanup, команда завершается ошибкой, не удаляя unknown claim. Это предотвращает дубли уведомлений.
+Query-токен менее безопасен: он может попасть в логи внешнего reverse proxy.
+Используйте его только если MegaPBX не умеет передавать CRM-ключ заголовком,
+отключите access log для webhook location и ротируйте ключ при раскрытии.
+
+Пример фильтров:
+
+```dotenv
+MEGAPBX_ALLOWED_GROUP=Support,Sales
+MEGAPBX_ALLOWED_DID=70000000001,70000000002
+MEGAPBX_DID_NAMES="70000000001=Main line;70000000002=Support line"
+```
+
+Списки групп и DID разделяются запятыми. Разрешено совпадение **группы ИЛИ DID**.
+Сравнение точное, с учётом регистра: DID в фильтре должен совпадать с `telnum`
+или `diversion` в payload, включая формат номера. Это номер назначения, а не
+телефон клиента. `MEGAPBX_DID_NAMES` меняет подписи, но не разрешения.
+Укажите хотя бы группу, DID или явно:
+
+```dotenv
+MEGAPBX_ALLOW_ALL=1
+```
+
+Не включайте `MEGAPBX_ALLOW_ALL`, если требуется ограниченная рабочая группа.
+
+## Настройка MAX
+
+1. Создайте и опубликуйте MAX-бота.
+2. Добавьте его в рабочий чат и назначьте необходимые права.
+3. Получите `MAX_CHAT_ID` из `bot_added` или `bot_started` через development
+   polling:
+
+   ```bash
+   megapbx-max discover-chat-id
+   ```
+
+4. Настройте `MAX_WEBHOOK_URL` и `MAX_WEBHOOK_SECRET`.
+5. Зарегистрируйте production Webhook:
+
+   ```bash
+   megapbx-max subscribe
+   megapbx-max subscriptions
+   ```
+
+CLI-команды используют переменные текущего окружения; файл `.env` сам по себе
+их не устанавливает. Последовательность получения ID и настройки подписки:
+[`docs/OPERATIONS.md`](docs/OPERATIONS.md).
+
+MAX Webhook принимает только `POST /max/webhook`. Секрет передаётся в
+`X-Max-Bot-Api-Secret`; открыть URL в браузере для проверки нельзя, потому что
+браузер отправляет `GET`.
 
 ## Конфигурация
 
-Полный шаблон: [`.env.example`](.env.example).
-
-Основные переменные:
+Полный шаблон находится в [`.env.example`](.env.example).
 
 | Переменная | Назначение |
 |---|---|
 | `MAX_BOT_TOKEN` | токен MAX Bot API |
-| `MAX_CHAT_ID` | положительный ID рабочего чата/канала |
-| `MAX_WEBHOOK_SECRET` | 5–256 символов для `X-Max-Bot-Api-Secret` |
-| `MAX_WEBHOOK_URL` | публичный URL для `megapbx-max subscribe` |
-| `MEGAPBX_CRM_TOKEN` | общий секрет входящего MegaPBX webhook |
+| `MAX_CHAT_ID` | знаковый non-zero `int64` ID чата |
+| `MAX_API_BASE` | HTTPS base URL MAX API |
+| `MAX_WEBHOOK_SECRET` | секрет заголовка MAX Webhook |
+| `MAX_WEBHOOK_URL` | публичный URL MAX Webhook |
+| `MAX_WEBHOOK_UPDATE_TYPES` | типы событий MAX |
+| `MEGAPBX_CRM_TOKEN` | секрет входящего MegaPBX Webhook |
+| `MEGAPBX_ALLOW_QUERY_TOKEN` | legacy `?token=...`, по умолчанию `0` |
 | `MEGAPBX_ALLOWED_GROUP` | CSV разрешённых групп |
 | `MEGAPBX_ALLOWED_DID` | CSV разрешённых DID |
+| `MEGAPBX_DID_NAMES` | `DID=Название;DID2=Название2` |
 | `MEGAPBX_ALLOW_ALL` | явное разрешение всех направлений |
-| `MEGAPBX_API_BASE` | HTTPS-база MegaPBX API без `/crmapi/v1` |
-| `MEGAPBX_API_TOKEN` | отдельный `X-API-KEY` для MegaPBX API |
-| `STATE_DB_PATH` | путь SQLite; локально `data/state.sqlite3`, installer — `/var/lib/megapbx-max/state.sqlite3` |
+| `MEGAPBX_API_BASE` | база MegaPBX API без `/crmapi/v1` |
+| `MEGAPBX_API_TOKEN` | отдельный API-ключ MegaPBX (`X-API-KEY`) |
+| `STATE_DB_PATH` | путь к SQLite |
+| `TZ_OFFSET_HOURS` | локальный часовой пояс для текста |
+| `MISSED_MAX_AGE_SEC` | окно поиска по телефону при автозакрытии; возраст очистки закрытых записей |
+| `MISSED_DEDUP_TTL_SEC` | TTL дедупликации missed-событий |
+| `JOB_MAX_ATTEMPTS` | предел попыток durable worker |
+| `SSL_CERT_FILE` | необязательный CA bundle |
 
-Пустой allowlist допустим только при явном `MEGAPBX_ALLOW_ALL=1`; без этого параметра старт отклоняет конфигурацию, чтобы не включить неявный fail-open режим.
+Все секреты передаются через environment file с правами `0600`, systemd или
+защищённый secret manager. Не коммитьте `.env`, SQLite и реальные webhook
+payloads.
 
-## Тесты
+## Health checks и диагностика
+
+```bash
+curl -fsS https://bot.example.com/healthz
+curl -fsS https://bot.example.com/readyz
+sudo systemctl status megapbx-max --no-pager
+sudo journalctl -u megapbx-max -f
+megapbx-max check
+megapbx-max subscriptions
+megapbx-max deliveries
+megapbx-max callback-unknown
+```
+
+Безопасная проверка CRM Webhook должна быть `POST` с корректной авторизацией.
+Тело `{` намеренно невалидно и не создаёт уведомление:
+
+```bash
+curl -i -X POST \
+  'https://bot.example.com/megapbx/webhook' \
+  -H "X-CRM-Token: ${MEGAPBX_CRM_TOKEN}" \
+  -H 'Content-Type: application/json' \
+  --data-binary '{'
+```
+
+Команда предполагает, что `MEGAPBX_CRM_TOKEN` уже задан в окружении.
+Ответ `400 Invalid webhook payload`
+означает, что TLS, reverse proxy и авторизация прошли. Ответ `401` означает,
+что секрет не принят. В production не отправляйте секреты в командной строке
+или URL без необходимости.
+
+События `ACCEPTED`/`COMPLETED` исходящего перезвона могут иметь отдельный
+`callid`. Сервис сопоставляет их с сохранёнными событиями направления и не
+пытается закрыть уведомление по чужому ID. Итоговое
+`history/Success/out/missedStatus=2` закрывает исходное уведомление.
+
+Не используйте `retry-unknown` без ручной проверки MAX: повторная отправка
+может создать дубль, если внешний запрос уже был принят.
+
+## Тестирование и качество
 
 ```bash
 pytest -q
@@ -186,18 +324,33 @@ sha256sum -c SHA256SUMS
 python -m pip wheel . --no-deps --wheel-dir dist
 ```
 
-## Документация и план
+CI запускает эти проверки на Python 3.11, 3.12 и 3.13, а также `pip-audit`.
+Тестовые fixtures используют только синтетические данные.
 
-- [поэтапный план](docs/IMPLEMENTATION_PLAN.md);
-- [подготовка и эксплуатация](docs/OPERATIONS.md);
-- [архитектурные решения](docs/DECISIONS.md);
-- [безопасность](SECURITY.md).
+## Документация
+
+- [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) — все параметры и значения по умолчанию;
+- [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) — HTTP-ошибки, DNS, TLS и очередь;
+- [`docs/OPERATIONS.md`](docs/OPERATIONS.md) — установка, Webhook, обновление,
+  rollback и диагностика;
+- [`docs/TESTING.md`](docs/TESTING.md) — контрактные и локальные проверки;
+- [`docs/DECISIONS.md`](docs/DECISIONS.md) — архитектурные решения;
+- [`docs/MIGRATION.md`](docs/MIGRATION.md) — перенос с Telegram-бота;
+- [`docs/PRIVACY.md`](docs/PRIVACY.md) — обрабатываемые данные и логирование;
+- [`SECURITY.md`](SECURITY.md) — правила раскрытия уязвимостей;
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — требования к pull request.
 
 ## Ограничения
 
-- `GET /chats` удалён из MAX API; ID чата сохраняется в конфигурации;
-- webhook и Long Polling нельзя использовать одновременно;
-- постоянное состояние хранится в одном SQLite-файле; для одной VM используйте один worker;
-- внешний вызов MAX API не поддерживает idempotency key, поэтому неоднозначный network outcome может потребовать ручной сверки;
-- отправка номера в `<code>` не гарантирует click-to-call на клиенте MAX;
-- installer реализован, но ещё должен быть проверен на чистой Debian/Ubuntu VM; финальный smoke-test на опубликованном MAX-боте остаётся обязательным.
+- MAX API не предоставляет универсальный способ перечислить все чаты бота;
+  `MAX_CHAT_ID` нужно получить из события добавления/старта;
+- Webhook и Long Polling нельзя использовать одновременно для одного бота;
+- SQLite рассчитана на один экземпляр приложения на одну базу;
+- MAX `POST /messages` не имеет idempotency key, поэтому неоднозначный network
+  outcome требует ручной сверки;
+- внешний reverse proxy должен передавать исходный body без преобразований и
+  не должен писать секреты из query string в access log.
+
+## Лицензия
+
+MIT, см. [`LICENSE`](LICENSE).

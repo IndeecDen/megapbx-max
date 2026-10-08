@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import random
 import uuid
 from collections.abc import Mapping
@@ -212,6 +213,19 @@ class JobWorker:
             else:
                 await self._retry(job, delay_sec=self._delay(job.attempt), error_code=type(exc).__name__)
         except Exception as exc:
+            origin = exc.__traceback__
+            while origin is not None and origin.tb_next is not None:
+                origin = origin.tb_next
+            if origin is not None:
+                logger.error(
+                    "Unexpected durable job failure: id=%d kind=%s error=%s origin=%s:%d:%s",
+                    job.id,
+                    job.kind,
+                    type(exc).__name__,
+                    os.path.basename(origin.tb_frame.f_code.co_filename),
+                    origin.tb_lineno,
+                    origin.tb_frame.f_code.co_name,
+                )
             await self._retry(job, delay_sec=self._delay(job.attempt), error_code=type(exc).__name__)
         return True
 

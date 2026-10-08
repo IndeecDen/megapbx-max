@@ -12,7 +12,7 @@ from megapbx_max.max_api.client import MaxApiError
 from megapbx_max.max_api.models import Message, MessageBody, Recipient, Update
 from megapbx_max.pbx import PbxDirectory
 from megapbx_max.service import CallbackOutcomeUnknown, EventPending, MegapbxService
-from megapbx_max.storage import SQLiteStore
+from megapbx_max.storage import SQLiteStore, StorageError
 
 
 class FakeDirectory(PbxDirectory):
@@ -317,6 +317,67 @@ async def test_outgoing_event_does_not_close_call(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("evidence", [
+    {"cmd": "event", "type": "OUTGOING"},
+    {"cmd": "history", "type": "out", "status": "Success", "missedStatus": "2"},
+    {"cmd": "history", "type": "out", "status": "Busy", "missedStatus": "2"},
+])
+async def test_outgoing_intermediate_events_complete_without_editing(
+    tmp_path: Path, evidence: dict[str, str],
+) -> None:
+    from megapbx_max.jobs import DurableJobQueue, JobWorker
+
+    service, storage, messenger = make_service(tmp_path)
+    record_id = store_record(storage, "missed-call", mid="mid-missed")
+    queue = DurableJobQueue(service.settings, storage)
+    jobs = [queue.enqueue_megapbx({
+        "cmd": "event", "type": event_type, "callid": "outgoing-call", "phone": "+15555550123",
+    }) for event_type in ("ACCEPTED", "COMPLETED")]
+    # The direction can arrive later and need not have been processed yet.
+    queue.enqueue_megapbx(evidence | {"callid": "different-call"})
+    worker = JobWorker(queue, service, retry_base_sec=0, retry_max_sec=0)
+    assert await worker.run_once()
+    assert storage.get_job_state(jobs[0].job_id) == "pending"
+    queue.enqueue_megapbx(evidence | {"callid": "outgoing-call"})
+    # Direction detection must survive reopening the database (service restart).
+    restarted = SQLiteStore(service.settings.state_db_path)
+    restarted.initialize()
+    service.storage = restarted
+    assert await worker.run_once()
+    assert await worker.run_once()
+    assert all(storage.get_job_state(job.job_id) == "completed" for job in jobs)
+    assert messenger.edits == []
+    assert messenger.sent == []
+    assert storage.get_by_id(record_id).closed is False  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+async def test_successful_callback_history_closes_after_outgoing_events(tmp_path: Path) -> None:
+    from megapbx_max.jobs import DurableJobQueue, JobWorker
+
+    service, storage, messenger = make_service(tmp_path)
+    record_id = store_record(storage, "missed-call", mid="mid-missed")
+    queue = DurableJobQueue(service.settings, storage)
+    common = {"callid": "outgoing-call", "phone": "+15555550123", "user": "agent"}
+    jobs = [queue.enqueue_megapbx(common | {"cmd": "event", "type": event_type})
+            for event_type in ("OUTGOING", "ACCEPTED", "COMPLETED")]
+    worker = JobWorker(queue, service)
+    for _ in jobs:
+        assert await worker.run_once()
+    assert messenger.edits == []
+    assert storage.get_by_id(record_id).closed is False  # type: ignore[union-attr]
+    history = queue.enqueue_megapbx(common | {
+        "cmd": "history", "type": "out", "status": "Success", "missedStatus": "2",
+    })
+    assert await worker.run_once()
+    assert storage.get_job_state(history.job_id) == "completed"
+    assert storage.get_by_id(record_id).closed is True  # type: ignore[union-attr]
+    assert len(messenger.edits) == 1
+    assert messenger.edits[0]["message_id"] == "mid-missed"
+    assert messenger.sent == []
+
+
+@pytest.mark.asyncio
 async def test_history_missed_with_out_status_updates_same_notification(tmp_path: Path) -> None:
     service, storage, messenger = make_service(tmp_path)
     missed = missed_payload("late-history")
@@ -383,6 +444,39 @@ async def test_max_callback_closes_message_once(tmp_path: Path) -> None:
     assert len(messenger.answers) == 1
     assert messenger.answers[0]["notification"] == "Отметили, спасибо!"
     assert messenger.answers[0]["buttons"][0]["payload"]
+
+
+@pytest.mark.asyncio
+async def test_confirmed_answer_is_not_replayed_after_commit_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    service, storage, messenger = make_service(tmp_path)
+    await service.send_missed_once(missed_payload("callback-interrupted"))
+    button = messenger.sent[0]["buttons"][0]
+    update = callback_update("cb-interrupted", button["payload"], chat_id=42, mid="mid-1")
+    original_complete = storage.complete_callback
+    attempts = 0
+
+    def interrupted_complete(*args: Any, **kwargs: Any) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise StorageError("Simulated failure after confirmed MAX answer")
+        original_complete(*args, **kwargs)
+
+    monkeypatch.setattr(storage, "complete_callback", interrupted_complete)
+    with pytest.raises(StorageError):
+        await service.handle_update(update)
+    record = storage.get_latest_by_call_id("callback-interrupted")
+    assert record is not None and record.closed is False
+    assert storage.claim_callback("cb-interrupted").state == "external_confirmed"
+    assert len(messenger.answers) == 1
+
+    # A new process uses the persisted external confirmation and must not send /answers again.
+    restarted = MegapbxService(service.settings, storage, messenger, FakeDirectory())
+    await restarted.handle_update(update)
+    record = storage.get_latest_by_call_id("callback-interrupted")
+    assert record is not None and record.closed is True and record.who == "Agent One"
+    assert len(messenger.answers) == 1
+    assert storage.claim_callback("cb-interrupted").state == "committed"
 
 
 @pytest.mark.asyncio

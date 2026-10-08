@@ -18,3 +18,17 @@ htmlcov/
 dist/
 build/
 *.egg-info/
+*.log
+*.db
+*.db-*
+*.sqlite-*
+backups/
+*.bak
+*.pem
+*.key
+*.p12
+*.pfx
+*.zip
+*.tar.gz
+.tools/
+.secrets/

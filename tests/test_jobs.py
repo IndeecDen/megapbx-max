@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -316,3 +317,23 @@ async def test_failed_job_is_retryable_until_dead_letter(tmp_path: Path) -> None
         {"cmd": "history", "status": "Missed", "callid": "job-fail", "telnum": "100"}
     ).inserted is False
     assert storage.get_job_state(result.job_id) == "pending"
+
+
+@pytest.mark.asyncio
+async def test_unexpected_failure_logs_location_without_exception_contents(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    _, storage, queue, service = make(tmp_path)
+    service.fail = True
+    result = queue.enqueue_update(update())
+    worker = JobWorker(queue, service, max_attempts=2, retry_base_sec=0, retry_max_sec=0)  # type: ignore[arg-type]
+
+    with caplog.at_level(logging.ERROR, logger="megapbx_max.jobs"):
+        assert await worker.run_once() is True
+    assert storage.get_job_state(result.job_id) == "pending"
+    diagnostics = [record for record in caplog.records if "Unexpected durable job failure" in record.message]
+    assert len(diagnostics) == 1
+    assert "origin=test_jobs.py:" in diagnostics[0].message
+    assert "error=RuntimeError" in diagnostics[0].message
+    assert "test failure" not in diagnostics[0].message
+    assert diagnostics[0].exc_info is None

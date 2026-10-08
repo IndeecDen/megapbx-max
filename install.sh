@@ -296,6 +296,9 @@ load_env_file() {
             MEGAPBX_MAX_ALLOW_HTTP_API) target=MEGAPBX_ALLOW_HTTP_API ;;
         esac
         printf -v "$target" '%s' "$raw"
+        # printf -v updates existing shell variables but does not export them;
+        # runtime validation and CLI calls below run in child processes.
+        export "$target"
     done < "$file"
 }
 
@@ -375,7 +378,7 @@ collect_config() {
     set_defaults
 
     read_secret MAX_BOT_TOKEN "MAX bot token: "
-    read_value MAX_CHAT_ID "MAX chat ID (positive int64): "
+    read_value MAX_CHAT_ID "MAX chat ID (nonzero signed int64): "
     read_secret MAX_WEBHOOK_SECRET "MAX webhook secret (5-256 chars): "
     read_secret MEGAPBX_CRM_TOKEN "MegaPBX CRM token: "
     read_optional MEGAPBX_ALLOWED_GROUP "Allowed groups, comma-separated (optional): "
@@ -469,18 +472,27 @@ validate_config() {
     [[ "$PUBLIC_BIND_HOST" =~ ^[A-Za-z0-9.:-]+$ ]] || die "Invalid PUBLIC_BIND_HOST"
     [[ "$PUBLIC_BIND_HOST" == "127.0.0.1" || "$PUBLIC_BIND_HOST" == "0.0.0.0" || "$PUBLIC_BIND_HOST" == "::" ]] || \
         die "PUBLIC_BIND_HOST must be 127.0.0.1, 0.0.0.0 or ::"
-    if [[ ! "$MAX_CHAT_ID" =~ ^[0-9]+$ ]]; then
-        die "MAX_CHAT_ID must be a positive integer"
+    if [[ ! "$MAX_CHAT_ID" =~ ^-?[0-9]+$ ]]; then
+        die "MAX_CHAT_ID must be a nonzero signed integer"
     fi
     local normalized_chat_id="$MAX_CHAT_ID"
+    local negative_chat_id=0
+    if [[ "$normalized_chat_id" == -* ]]; then
+        negative_chat_id=1
+        normalized_chat_id="${normalized_chat_id#-}"
+    fi
     while [[ ${#normalized_chat_id} -gt 1 && "$normalized_chat_id" == 0* ]]; do
         normalized_chat_id="${normalized_chat_id#0}"
     done
-    [[ "$normalized_chat_id" != "0" ]] || die "MAX_CHAT_ID must be a positive integer"
+    [[ "$normalized_chat_id" != "0" ]] || die "MAX_CHAT_ID must be a nonzero signed integer"
     # The string comparison is intentional: Bash arithmetic would overflow for long IDs.
     # shellcheck disable=SC2071
+    local chat_id_limit="9223372036854775807"
+    if (( negative_chat_id )); then
+        chat_id_limit="9223372036854775808"
+    fi
     if (( ${#normalized_chat_id} > 19 )) || \
-        { (( ${#normalized_chat_id} == 19 )) && [[ "$normalized_chat_id" > "9223372036854775807" ]]; }; then
+        { (( ${#normalized_chat_id} == 19 )) && [[ "$normalized_chat_id" > "$chat_id_limit" ]]; }; then
         die "MAX_CHAT_ID exceeds int64"
     fi
     [[ "$MAX_WEBHOOK_SECRET" =~ ^[A-Za-z0-9_-]{5,256}$ ]] || die "Invalid MAX_WEBHOOK_SECRET"
@@ -527,13 +539,13 @@ write_env_line() {
     value="${value//\\/\\\\}"
     value="${value//\"/\\\"}"
     value="${value//\$/\\\$}"
-    printf '%s="%s"\n' "$key" "$value" >> "$CONFIG_FILE"
+    printf '%s="%s"\n' "$key" "$value" >> "$CONFIG_WRITE_FILE"
 }
 
 write_config() {
-    local tmp
-    tmp="$(mktemp "${CONFIG_FILE}.tmp.XXXXXX")"
-    : > "$tmp"
+    local CONFIG_WRITE_FILE
+    CONFIG_WRITE_FILE="$(mktemp "${CONFIG_FILE}.tmp.XXXXXX")"
+    : > "$CONFIG_WRITE_FILE"
     write_env_line MAX_BOT_TOKEN "$MAX_BOT_TOKEN"
     write_env_line MAX_CHAT_ID "$MAX_CHAT_ID"
     write_env_line MAX_API_BASE "$MAX_API_BASE"
@@ -565,9 +577,9 @@ write_config() {
     write_env_line JOB_RETRY_MAX_SEC "$JOB_RETRY_MAX_SEC"
     write_env_line JOB_LEASE_SEC "$JOB_LEASE_SEC"
     write_env_line STATE_DB_PATH "$STATE_ROOT/state.sqlite3"
-    chown root:root "$tmp"
-    chmod 600 "$tmp"
-    mv -f "$tmp" "$CONFIG_FILE"
+    chown root:root "$CONFIG_WRITE_FILE"
+    chmod 600 "$CONFIG_WRITE_FILE"
+    mv -f "$CONFIG_WRITE_FILE" "$CONFIG_FILE"
 }
 
 secure_config_file() {
@@ -698,6 +710,52 @@ prepare_backup_root() {
 }
 
 
+backup_state_database() {
+    local database="${STATE_DB_PATH:-$STATE_ROOT/state.sqlite3}"
+    # Back up the existing installation's database, even when replacing config.
+    if [[ -f "$TX_DIR/config" ]]; then
+        database="$(
+            unset STATE_DB_PATH
+            load_env_file "$TX_DIR/config"
+            printf '%s' "${STATE_DB_PATH:-$STATE_ROOT/state.sqlite3}"
+        )"
+    fi
+    if [[ "$database" != /* ]]; then database="$INSTALL_ROOT/current/$database"; fi
+    [[ -f "$database" ]] || return 0
+    local backup_python=python3
+    if [[ -x "$INSTALL_ROOT/current/.venv/bin/python" ]]; then
+        backup_python="$INSTALL_ROOT/current/.venv/bin/python"
+    fi
+    "$backup_python" - "$database" "$TX_DIR/state.sqlite3" <<'PY' || return 1
+import os
+from contextlib import closing
+from pathlib import Path
+import sqlite3
+import sys
+import time
+
+source, destination = map(Path, sys.argv[1:])
+deadline = time.monotonic() + 60
+
+def progress(status, remaining, total):
+    if time.monotonic() > deadline:
+        raise TimeoutError("Database backup timed out")
+
+try:
+    with closing(sqlite3.connect(source.resolve().as_uri() + "?mode=ro", uri=True)) as src:
+        with closing(sqlite3.connect(destination)) as dst:
+            os.chmod(destination, 0o600)
+            src.backup(dst, pages=256, progress=progress, sleep=0.1)
+            if dst.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
+                raise RuntimeError("Database backup integrity check failed")
+except Exception as exc:
+    destination.unlink(missing_ok=True)
+    print("SQLite backup failed: " + type(exc).__name__, file=sys.stderr)
+    sys.exit(1)
+PY
+    log "SQLite backup verified: $TX_DIR/state.sqlite3"
+}
+
 begin_transaction() {
     (( DRY_RUN == 0 )) || return 0
     TX_DIR="$(mktemp -d "$BACKUP_ROOT/transaction.XXXXXX")"
@@ -718,6 +776,7 @@ begin_transaction() {
     if command -v systemctl >/dev/null 2>&1 && systemctl is-enabled --quiet nginx; then
         NGINX_WAS_ENABLED=1
     fi
+    backup_state_database || die "Cannot back up existing SQLite state; installation aborted"
     TRANSACTION_ACTIVE=1
     log "Transaction backup: $TX_DIR"
 }
@@ -831,9 +890,9 @@ StandardError=journal
 [Install]
 WantedBy=multi-user.target
 EOF
-    systemd-analyze verify "$tmp" >/dev/null
     install -o root -g root -m 644 "$tmp" "$UNIT_PATH"
     rm -f "$tmp"
+    systemd-analyze verify "$UNIT_PATH" >/dev/null
 }
 
 nginx_server_name_in_file() {
@@ -1042,11 +1101,11 @@ main() {
     if [[ "$REPLACE_CONFIG" -eq 1 || ! -f "$CONFIG_FILE" ]]; then write_config; fi
     secure_config_file
     validate_runtime_config
+    rm -f "$INSTALL_ROOT/current"
+    ln -s "$FINAL_DIR" "$INSTALL_ROOT/current"
     render_unit
     systemctl daemon-reload
     systemctl enable "$SERVICE_NAME"
-    rm -f "$INSTALL_ROOT/current"
-    ln -s "$FINAL_DIR" "$INSTALL_ROOT/current"
 
     if (( NO_START == 0 )); then
         if systemctl is-active --quiet "$SERVICE_NAME"; then

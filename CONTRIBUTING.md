@@ -26,6 +26,29 @@ python -m pip wheel . --no-deps --wheel-dir dist
 5. Для webhook добавьте sanitized fixture без персональных данных.
 6. Для изменений MAX-клиента сверьте контракт с актуальной [OpenAPI-схемой](https://github.com/max-messenger/api-schema).
 
+## Manifest и приватность
+
+После изменения release-файлов обновите их SHA-256 (пути уже перечислены в
+`SHA256SUMS`):
+
+```python
+from hashlib import sha256
+from pathlib import Path
+
+manifest = Path("SHA256SUMS")
+paths = [line.split(" *", 1)[1] for line in manifest.read_text().splitlines() if line]
+manifest.write_bytes("".join(
+    f"{sha256(Path(path).read_bytes()).hexdigest()} *{path}\n" for path in paths
+).encode())
+```
+
+Используйте LF согласно `.gitattributes`; manifest проверяется также тестами.
+Перед push проверьте `git diff --cached`, а не только рабочую копию.
+Для поиска секретов рекомендуются `gitleaks git . --log-opts="--all" --redact`
+и проверка подготовленного дерева файлов. Сканер не заменяет проверку адресов,
+ID, телефонов и имён: используйте `example.com` и синтетические fixtures.
+Для commit email можно включить GitHub noreply в настройках аккаунта.
+
 ## Стиль
 
 - Python 3.11+.
