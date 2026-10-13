@@ -634,17 +634,43 @@ class SQLiteStore:
         return _record_from_row(row) if row is not None else None
 
     def find_recent_by_phone(self, phone: str, max_age_sec: int, *, now: float | None = None) -> NotificationRecord | None:
+        records = self.find_recent_records_by_phone(phone, max_age_sec, now=now)
+        return records[0] if records else None
+
+    def find_recent_records_by_phone(
+        self,
+        phone: str,
+        max_age_sec: int,
+        *,
+        now: float | None = None,
+        include_closed: bool = False,
+    ) -> list[NotificationRecord]:
+        """Return all open, recent notifications for a normalized phone number.
+
+        A customer may call several times before an operator calls back.  A
+        successful callback applies to that customer's outstanding missed-call
+        notifications, rather than only the newest one.
+        """
         if not phone:
-            return None
+            return []
         timestamp = time.time() if now is None else now
+        closed_filter = "" if include_closed else "AND closed_at IS NULL "
+        claim_filter = "" if include_closed else "AND (claim_token IS NULL OR claim_expires_at <= ?) "
+        params: tuple[object, ...] = (
+            (phone, timestamp - max_age_sec)
+            if include_closed
+            else (phone, timestamp - max_age_sec, timestamp)
+        )
         with self._connection() as connection:
-            row = connection.execute(
-                "SELECT * FROM notifications WHERE phone = ? AND closed_at IS NULL "
-                "AND created_at >= ? AND (claim_token IS NULL OR claim_expires_at <= ?) "
-                "ORDER BY created_at DESC LIMIT 1",
-                (phone, timestamp - max_age_sec, timestamp),
-            ).fetchone()
-        return _record_from_row(row) if row is not None else None
+            rows = connection.execute(
+                "SELECT * FROM notifications WHERE phone = ? "
+                + closed_filter
+                + "AND created_at >= ? "
+                + claim_filter
+                + "ORDER BY created_at DESC",
+                params,
+            ).fetchall()
+        return [_record_from_row(row) for row in rows]
 
     def claim_record(
         self,

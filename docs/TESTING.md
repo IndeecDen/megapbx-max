@@ -15,7 +15,7 @@ python -m pip wheel . --no-deps --wheel-dir dist
 
 ## Локальная проверка release
 
-Последний локальный прогон на Windows/Python 3.12: `125 passed`; также зелёные
+Последний локальный прогон на Python 3.14: `127 passed`; также зелёные
 `ruff`, `mypy`, `compileall`, `bash -n install.sh` и `sha256sum -c SHA256SUMS`.
 Собранный wheel установлен в чистое Python 3.11.16 environment, `pip check` не
 обнаружил конфликтов. Запуск настоящего uvicorn-процесса проверил `/readyz`,
