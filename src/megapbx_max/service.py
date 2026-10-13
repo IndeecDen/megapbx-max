@@ -350,10 +350,27 @@ class MegapbxService:
         return await self._close_record(record.id, as_text(payload.get("user")), source="event")
 
     async def auto_close_by_callback(self, payload: dict[str, Any]) -> bool:
-        record = self._recent_record(payload.get("phone"))
-        if record is None:
-            return False
-        return await self._close_record(record.id, as_text(payload.get("user")), source="callback")
+        records = self._recent_records(payload.get("phone"))
+        if not records:
+            normalized = self._normalized_phone(payload.get("phone"))
+            all_records = (
+                self.storage.find_recent_records_by_phone(
+                    normalized,
+                    self.settings.missed_max_age_sec,
+                    include_closed=True,
+                )
+                if normalized
+                else []
+            )
+            # A duplicate final history event is expected after the first one
+            # closed every matching notification. Keep it idempotent, while
+            # still retrying when no notification has arrived yet or an open
+            # notification is temporarily claimed by another worker.
+            return bool(all_records) and all(record.closed for record in all_records)
+        for record in records:
+            if not await self._close_record(record.id, as_text(payload.get("user")), source="callback"):
+                return False
+        return True
 
     async def update_failed_callback(self, payload: dict[str, Any]) -> bool:
         record = self._recent_record(payload.get("phone"))
@@ -628,8 +645,15 @@ class MegapbxService:
         return True
 
     def _recent_record(self, phone: Any):
-        normalized = normalize_phone(as_text(phone)) if as_text(phone) else ""
-        return self.storage.find_recent_by_phone(normalized, self.settings.missed_max_age_sec)
+        records = self._recent_records(phone)
+        return records[0] if records else None
+
+    def _recent_records(self, phone: Any):
+        normalized = self._normalized_phone(phone)
+        return self.storage.find_recent_records_by_phone(normalized, self.settings.missed_max_age_sec)
+
+    def _normalized_phone(self, phone: Any) -> str:
+        return normalize_phone(as_text(phone)) if as_text(phone) else ""
 
     def _parse_callback_payload(self, raw: str) -> CallbackPayload | None:
         try:

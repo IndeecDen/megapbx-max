@@ -378,6 +378,56 @@ async def test_successful_callback_history_closes_after_outgoing_events(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_successful_callback_closes_all_recent_missed_calls_for_phone(tmp_path: Path) -> None:
+    service, storage, messenger = make_service(tmp_path)
+    record_ids = [
+        store_record(storage, f"missed-{index}", mid=f"mid-{index}")
+        for index in range(3)
+    ]
+
+    await service.handle_megapbx_payload({
+        "cmd": "history",
+        "type": "out",
+        "status": "Success",
+        "missedStatus": "2",
+        "phone": "+15555550123",
+        "user": "agent",
+    })
+
+    assert all(storage.get_by_id(record_id).closed for record_id in record_ids)  # type: ignore[union-attr]
+    assert [edit["message_id"] for edit in messenger.edits] == ["mid-2", "mid-1", "mid-0"]
+
+    # A repeated final history event is already reconciled, not retried forever.
+    await service.handle_megapbx_payload({
+        "cmd": "history",
+        "type": "out",
+        "status": "Success",
+        "missedStatus": "2",
+        "phone": "+15555550123",
+        "user": "agent",
+    })
+    assert len(messenger.edits) == 3
+
+
+@pytest.mark.asyncio
+async def test_callback_retries_when_recent_notification_is_claimed(tmp_path: Path) -> None:
+    service, storage, _ = make_service(tmp_path)
+    record_id = store_record(storage, "claimed-missed", mid="mid-claimed")
+    claim = storage.claim_record(record_id)
+    assert claim is not None
+
+    handled = await service.auto_close_by_callback(
+        {
+            "phone": "+15555550123",
+            "user": "agent",
+        }
+    )
+
+    assert handled is False
+    storage.release_record(record_id, claim.token)
+
+
+@pytest.mark.asyncio
 async def test_history_missed_with_out_status_updates_same_notification(tmp_path: Path) -> None:
     service, storage, messenger = make_service(tmp_path)
     missed = missed_payload("late-history")
